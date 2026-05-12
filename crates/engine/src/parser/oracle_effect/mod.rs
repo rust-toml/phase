@@ -15457,6 +15457,29 @@ mod tests {
     }
 
     #[test]
+    fn effect_draw_and_self_pump_splits_self_reference_clause() {
+        let def = parse_effect_chain(
+            "draw a card and this creature gets +2/+0 until end of turn",
+            AbilityKind::Spell,
+        );
+
+        assert!(matches!(*def.effect, Effect::Draw { .. }));
+        let pump = def
+            .sub_ability
+            .as_ref()
+            .expect("expected pump continuation");
+        assert!(matches!(
+            pump.effect.as_ref(),
+            Effect::Pump {
+                power: PtValue::Fixed(2),
+                toughness: PtValue::Fixed(0),
+                target: TargetFilter::SelfRef,
+            }
+        ));
+        assert_eq!(pump.duration, Some(Duration::UntilEndOfTurn));
+    }
+
+    #[test]
     fn effect_chain_unless_target_controller_pays_mana() {
         use crate::types::mana::ManaCost;
 

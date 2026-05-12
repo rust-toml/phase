@@ -844,6 +844,8 @@ fn starts_bare_and_clause_lower(s: &str) -> bool {
         value((), tag("it gets ")),
         value((), tag("it has ")),
         value((), tag("it loses ")),
+        value((), tag("this creature gets ")),
+        value((), tag("~ gets ")),
     )))
     .parse(s)
     .is_ok();
@@ -3198,5 +3200,13 @@ mod tests {
         // Other verbs that happen to mention counters must not match.
         let result = try_parse_put_counters_on_token_followup("remove a +1/+1 counter on it");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn bare_and_clause_starts_on_self_reference_continuous_subjects() {
+        assert!(starts_bare_and_clause(
+            "this creature gets +2/+0 until end of turn"
+        ));
+        assert!(starts_bare_and_clause("~ gets +2/+0 until end of turn"));
     }
 }
