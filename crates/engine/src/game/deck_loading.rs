@@ -774,6 +774,65 @@ mod tests {
     }
 
     #[test]
+    fn resolve_combined_face_commander_name_creates_command_zone_object() {
+        let front_face = CardFace {
+            name: "Brigid, Clachan's Heart".to_string(),
+            card_type: CardType {
+                supertypes: vec![crate::types::card_type::Supertype::Legendary],
+                core_types: vec![crate::types::card_type::CoreType::Creature],
+                subtypes: vec!["Kithkin".to_string(), "Warrior".to_string()],
+            },
+            ..make_creature_face()
+        };
+        let back_face = CardFace {
+            name: "Brigid, Doun's Mind".to_string(),
+            card_type: CardType {
+                supertypes: vec![crate::types::card_type::Supertype::Legendary],
+                core_types: vec![crate::types::card_type::CoreType::Creature],
+                subtypes: vec!["Kithkin".to_string(), "Soldier".to_string()],
+            },
+            ..make_creature_face()
+        };
+        let db_json = serde_json::json!({
+            "brigid, clachan's heart": front_face,
+            "brigid, doun's mind": back_face,
+        })
+        .to_string();
+        let db = CardDatabase::from_json_str(&db_json).unwrap();
+        let list = DeckList {
+            player: PlayerDeckList {
+                main_deck: vec![String::from("Grizzly Bears")],
+                sideboard: vec![],
+                commander: vec![String::from(
+                    "Brigid, Clachan's Heart // Brigid, Doun's Mind",
+                )],
+            },
+            opponent: PlayerDeckList {
+                main_deck: vec![],
+                sideboard: vec![],
+                commander: vec![],
+            },
+            ai_decks: vec![],
+        };
+
+        let payload = resolve_deck_list(&db, &list);
+        assert_eq!(payload.player.commander.len(), 1);
+        assert_eq!(
+            payload.player.commander[0].card.name,
+            "Brigid, Clachan's Heart"
+        );
+
+        let mut state = GameState::new_two_player(42);
+        load_deck_into_state(&mut state, &payload);
+
+        assert_eq!(state.command_zone.len(), 1);
+        let commander = &state.objects[&state.command_zone[0]];
+        assert_eq!(commander.name, "Brigid, Clachan's Heart");
+        assert_eq!(commander.zone, Zone::Command);
+        assert!(commander.is_commander);
+    }
+
+    #[test]
     fn load_deck_commander_subtypes_collected() {
         let mut state = GameState::new_two_player(42);
         let commander_face = CardFace {

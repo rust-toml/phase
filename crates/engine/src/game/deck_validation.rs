@@ -1406,13 +1406,14 @@ fn has_deck_limit_override(db: &CardDatabase, canonical_name: &str) -> bool {
 /// Resolves a card name to the key used in the database. For DFC names like "Front // Back",
 /// returns the front face name if that's how it's indexed.
 fn resolve_card_name<'a>(db: &CardDatabase, name: &'a str) -> &'a str {
-    if db.get_face_by_name(name).is_some() {
-        return name;
-    }
-    if let Some(front) = name.split(" // ").next() {
+    if let Some((front, _)) = name.split_once("//") {
+        let front = front.trim();
         if db.get_face_by_name(front).is_some() {
             return front;
         }
+    }
+    if db.get_face_by_name(name).is_some() {
+        return name;
     }
     name
 }
