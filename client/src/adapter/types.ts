@@ -296,15 +296,48 @@ export type ManaPip =
 
 // ── Mana ─────────────────────────────────────────────────────────────────
 
+// Mirrors `crate::types::mana::ManaRestriction` (externally-tagged serde:
+// unit variants serialize as bare strings, data variants as
+// `{ VariantName: payload }`). `KeywordKind` is the engine's large unit-only
+// keyword enum — serialized as a bare keyword string (e.g. "Flashback").
+export type KeywordKind = string;
+
 export type ManaRestriction =
+  // "Spend this mana only to cast creature/artifact spells."
   | { OnlyForSpellType: string }
+  // "Spend this mana only to cast a creature spell of the chosen type."
+  | { OnlyForCreatureType: string }
+  // "Spend this mana only to cast creature spells or activate creature abilities."
+  | { OnlyForTypeSpellsOrAbilities: string }
+  // "Spend this mana only to cast spells with flashback."
+  | { OnlyForSpellWithKeywordKind: KeywordKind }
+  // "Spend this mana only to cast spells with flashback from a graveyard."
+  | { OnlyForSpellWithKeywordKindFromZone: [KeywordKind, Zone] }
+  // "Spend this mana only to activate abilities."
+  | "OnlyForActivation"
+  // "Spend this mana only on costs that include {X}."
+  | "OnlyForXCosts"
+  // Internal convoke-tap marker — never surfaced to the player.
   | "ConvokePayment";
+
+// Mirrors `crate::types::mana::ManaSpellGrant` (CR 106.6) — properties this
+// mana grants to the spell it is spent on. Externally-tagged serde.
+export type ManaSpellGrant =
+  | "CantBeCountered"
+  | {
+      AddKeywordUntilEndOfTurn: {
+        keyword: Keyword;
+        restriction?: ManaRestriction | null;
+      };
+    };
 
 export interface ManaUnit {
   color: ManaType;
   source_id: ObjectId;
   snow: boolean;
   restrictions: ManaRestriction[];
+  // `#[serde(default, skip_serializing_if = "Vec::is_empty")]` — absent when empty.
+  grants?: ManaSpellGrant[];
 }
 
 export interface ManaPool {

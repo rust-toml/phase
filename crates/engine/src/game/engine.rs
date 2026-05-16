@@ -1800,11 +1800,26 @@ fn apply_action(
                     )?
                 }
             };
-            // CR 605.1b: Process TapsForMana triggers inline after mana color
-            // choice resolves (dual land during mana payment).
+            // CR 603.2c + CR 605.4a: A mana color choice produces mana inline.
+            // Scan its events for TapsForMana mana multipliers and for
+            // cost-payment triggers HERE, because for `ManaPayment` /
+            // `UnlessPayment` resumes the post-action pipeline is skipped
+            // (it is guarded by `matches!(waiting_for, WaitingFor::Priority)`),
+            // so this is the only scan site — and CR 605.4a requires the bonus
+            // mana to enter the pool before the spell's payment step continues.
+            // Do NOT "simplify" this scan away for non-Priority resumes.
             if events.len() > events_before {
                 let mana_events: Vec<_> = events[events_before..].to_vec();
                 super::triggers::process_triggers(state, &mana_events);
+            }
+            // CR 603.2c: For a `Priority` resume the post-action pipeline WOULD
+            // re-scan these same events, double-firing the multiplier (issue
+            // #443: Delighted Halfling under a mana multiplier yields 5 not 3).
+            // Claim the scan via `triggers_processed_inline` — the same
+            // mechanism `DeclareAttackers` uses — so the pipeline runs SBAs,
+            // delayed/state triggers, and layers but skips the trigger re-scan.
+            if matches!(wf, WaitingFor::Priority { .. }) {
+                triggers_processed_inline = true;
             }
             wf
         }
@@ -8650,6 +8665,306 @@ mod tests {
                 .count_color(crate::types::mana::ManaType::Green),
             1
         );
+    }
+
+    /// Issue #443: A `TapsForMana` mana multiplier must fire exactly once when
+    /// an `AnyOneColor` mana ability routes through a `ChooseManaColor` prompt
+    /// during a `Priority` resume. Pre-fix, the inline scan in the
+    /// `ChooseManaColor` arm AND the post-action pipeline both scanned the same
+    /// `FromTap` `ManaAdded` event, double-firing the multiplier (1 base + 2 +
+    /// 2 = 5 instead of 1 base + 2 = 3). CR 603.2c.
+    #[test]
+    fn taps_for_mana_multiplier_fires_once_on_color_choice_priority_resume() {
+        let mut state = setup_game_at_main_phase();
+
+        // A `TapsForMana` multiplier on a creature: whenever a permanent the
+        // controller controls taps for mana, add mana of that type.
+        // `TriggerEventManaType` adds one unit per fire; two trigger
+        // definitions give a deterministic +2 multiplier (base 1 + 2 = 3).
+        let mana_doubler = create_object(
+            &mut state,
+            CardId(200),
+            PlayerId(0),
+            "Mana Multiplier".to_string(),
+            Zone::Battlefield,
+        );
+        {
+            let obj = state.objects.get_mut(&mana_doubler).unwrap();
+            obj.card_types.core_types.push(CoreType::Creature);
+            obj.entered_battlefield_turn = Some(1);
+            let multiplier_trigger = || {
+                TriggerDefinition::new(TriggerMode::TapsForMana)
+                    .execute(AbilityDefinition::new(
+                        AbilityKind::Database,
+                        Effect::Mana {
+                            produced: crate::types::ability::ManaProduction::TriggerEventManaType,
+                            restrictions: vec![],
+                            grants: vec![],
+                            expiry: None,
+                            target: None,
+                        },
+                    ))
+                    .valid_card(TargetFilter::Any)
+                    .valid_target(TargetFilter::Controller)
+            };
+            obj.trigger_definitions.push(multiplier_trigger());
+            obj.trigger_definitions.push(multiplier_trigger());
+        }
+
+        // An `AnyOneColor` source with >1 color option — this routes through
+        // `WaitingFor::ChooseManaColor`.
+        let any_color = create_object(
+            &mut state,
+            CardId(201),
+            PlayerId(0),
+            "Any Color Rock".to_string(),
+            Zone::Battlefield,
+        );
+        {
+            let obj = state.objects.get_mut(&any_color).unwrap();
+            obj.card_types.core_types.push(CoreType::Artifact);
+            obj.entered_battlefield_turn = Some(1);
+            Arc::make_mut(&mut obj.abilities).push(
+                AbilityDefinition::new(
+                    AbilityKind::Activated,
+                    Effect::Mana {
+                        produced: crate::types::ability::ManaProduction::AnyOneColor {
+                            count: QuantityExpr::Fixed { value: 1 },
+                            color_options: vec![
+                                crate::types::mana::ManaColor::White,
+                                crate::types::mana::ManaColor::Blue,
+                                crate::types::mana::ManaColor::Black,
+                                crate::types::mana::ManaColor::Red,
+                                crate::types::mana::ManaColor::Green,
+                            ],
+                            contribution: ManaContribution::Base,
+                        },
+                        restrictions: vec![],
+                        grants: vec![],
+                        expiry: None,
+                        target: None,
+                    },
+                )
+                .cost(AbilityCost::Tap),
+            );
+        }
+
+        let result = apply_as_current(
+            &mut state,
+            GameAction::ActivateAbility {
+                source_id: any_color,
+                ability_index: 0,
+            },
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                result.waiting_for,
+                WaitingFor::ChooseManaColor {
+                    player: PlayerId(0),
+                    ..
+                }
+            ),
+            "expected ChooseManaColor, got {:?}",
+            result.waiting_for,
+        );
+        assert_eq!(state.players[0].mana_pool.total(), 0);
+
+        let result = apply_as_current(
+            &mut state,
+            GameAction::ChooseManaColor {
+                choice: crate::types::game_state::ManaChoice::SingleColor(
+                    crate::types::mana::ManaType::Green,
+                ),
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            result.waiting_for,
+            WaitingFor::Priority {
+                player: PlayerId(0)
+            }
+        ));
+
+        // 1 base + 2 from the multiplier = 3. Pre-fix this yields 5 (the
+        // multiplier double-fires). Assert it is neither 1 (multiplier dropped)
+        // nor 5 (double-fire).
+        let total = state.players[0].mana_pool.total();
+        assert_ne!(total, 1, "multiplier must fire (got base mana only)");
+        assert_ne!(total, 5, "multiplier must fire exactly once, not twice");
+        assert_eq!(total, 3, "expected 1 base + 2 multiplier = 3, got {total}",);
+        assert_eq!(
+            state.players[0]
+                .mana_pool
+                .count_color(crate::types::mana::ManaType::Green),
+            3,
+        );
+    }
+
+    /// Issue #443 companion: the same `TapsForMana` multiplier must also fire
+    /// exactly once when the `AnyOneColor` ability is activated mid-payment
+    /// (`ManaAbilityResume::ManaPayment`). For that resume the post-action
+    /// pipeline is skipped entirely, so the inline scan in the
+    /// `ChooseManaColor` arm is the ONLY scan site — proving the fix does not
+    /// drop the multiplier on the non-`Priority` path. CR 603.2c + CR 605.4a.
+    #[test]
+    fn taps_for_mana_multiplier_fires_once_on_color_choice_mana_payment_resume() {
+        let mut state = setup_game_at_main_phase();
+
+        // Mirror the production precondition: ManaPayment is only entered with
+        // `pending_cast` populated (see the drift invariant in `derived`).
+        state.pending_cast = Some(Box::new(crate::types::game_state::PendingCast {
+            object_id: ObjectId(0),
+            card_id: CardId(0),
+            ability: crate::types::ability::ResolvedAbility::new(
+                crate::types::ability::Effect::Unimplemented {
+                    name: "Test".to_string(),
+                    description: None,
+                },
+                vec![],
+                ObjectId(0),
+                PlayerId(0),
+            ),
+            cost: crate::types::mana::ManaCost::NoCost,
+            activation_cost: None,
+            activation_ability_index: None,
+            target_constraints: vec![],
+            casting_variant: crate::types::game_state::CastingVariant::Normal,
+            cast_timing_permission: None,
+            distribute: None,
+            origin_zone: crate::types::zones::Zone::Hand,
+            additional_cost_flow: None,
+            deferred_modal_choice: None,
+            deferred_target_selection: false,
+            additional_cost_decided: false,
+            declared_kickers_to_pay: Vec::new(),
+            declined_kickers: Vec::new(),
+            convoked_creatures: Vec::new(),
+        }));
+        state.waiting_for = WaitingFor::ManaPayment {
+            player: PlayerId(0),
+            convoke_mode: None,
+        };
+
+        let mana_doubler = create_object(
+            &mut state,
+            CardId(202),
+            PlayerId(0),
+            "Mana Multiplier".to_string(),
+            Zone::Battlefield,
+        );
+        {
+            let obj = state.objects.get_mut(&mana_doubler).unwrap();
+            obj.card_types.core_types.push(CoreType::Creature);
+            obj.entered_battlefield_turn = Some(1);
+            let multiplier_trigger = || {
+                TriggerDefinition::new(TriggerMode::TapsForMana)
+                    .execute(AbilityDefinition::new(
+                        AbilityKind::Database,
+                        Effect::Mana {
+                            produced: crate::types::ability::ManaProduction::TriggerEventManaType,
+                            restrictions: vec![],
+                            grants: vec![],
+                            expiry: None,
+                            target: None,
+                        },
+                    ))
+                    .valid_card(TargetFilter::Any)
+                    .valid_target(TargetFilter::Controller)
+            };
+            obj.trigger_definitions.push(multiplier_trigger());
+            obj.trigger_definitions.push(multiplier_trigger());
+        }
+
+        let any_color = create_object(
+            &mut state,
+            CardId(203),
+            PlayerId(0),
+            "Any Color Rock".to_string(),
+            Zone::Battlefield,
+        );
+        {
+            let obj = state.objects.get_mut(&any_color).unwrap();
+            obj.card_types.core_types.push(CoreType::Artifact);
+            obj.entered_battlefield_turn = Some(1);
+            Arc::make_mut(&mut obj.abilities).push(
+                AbilityDefinition::new(
+                    AbilityKind::Activated,
+                    Effect::Mana {
+                        produced: crate::types::ability::ManaProduction::AnyOneColor {
+                            count: QuantityExpr::Fixed { value: 1 },
+                            color_options: vec![
+                                crate::types::mana::ManaColor::White,
+                                crate::types::mana::ManaColor::Blue,
+                                crate::types::mana::ManaColor::Black,
+                                crate::types::mana::ManaColor::Red,
+                                crate::types::mana::ManaColor::Green,
+                            ],
+                            contribution: ManaContribution::Base,
+                        },
+                        restrictions: vec![],
+                        grants: vec![],
+                        expiry: None,
+                        target: None,
+                    },
+                )
+                .cost(AbilityCost::Tap),
+            );
+        }
+
+        // Activate the AnyOneColor ability mid-payment → ManaAbilityResume::ManaPayment.
+        let result = apply_as_current(
+            &mut state,
+            GameAction::ActivateAbility {
+                source_id: any_color,
+                ability_index: 0,
+            },
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                result.waiting_for,
+                WaitingFor::ChooseManaColor {
+                    player: PlayerId(0),
+                    ..
+                }
+            ),
+            "expected ChooseManaColor, got {:?}",
+            result.waiting_for,
+        );
+
+        let result = apply_as_current(
+            &mut state,
+            GameAction::ChooseManaColor {
+                choice: crate::types::game_state::ManaChoice::SingleColor(
+                    crate::types::mana::ManaType::Green,
+                ),
+            },
+        )
+        .unwrap();
+
+        // The resume returns to ManaPayment (the post-action pipeline never
+        // runs for this `WaitingFor`), so the inline scan is the sole scan site.
+        assert!(
+            matches!(
+                result.waiting_for,
+                WaitingFor::ManaPayment {
+                    player: PlayerId(0),
+                    ..
+                }
+            ),
+            "expected ManaPayment resume, got {:?}",
+            result.waiting_for,
+        );
+
+        // 1 base + 2 multiplier = 3 — fired exactly once, not dropped, not doubled.
+        let total = state.players[0].mana_pool.total();
+        assert_ne!(
+            total, 1,
+            "multiplier must still fire on the ManaPayment path"
+        );
+        assert_ne!(total, 5, "multiplier must fire exactly once, not twice");
+        assert_eq!(total, 3, "expected 1 base + 2 multiplier = 3, got {total}",);
     }
 
     #[test]
