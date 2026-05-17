@@ -3339,12 +3339,12 @@ enum CandidateMateriality {
 ///
 /// CR 616.1d: `ProposedEvent::ZoneChange::enter_transformed` ("enters with its
 /// back face up") is a forced-choice category, but it has no `*_modification`
-/// side field on `ReplacementDefinition` — the replacement pipeline never
-/// mutates `enter_transformed` (it is set only at event construction in
-/// `stack.rs` / `triggers.rs` / `flip_coin.rs`). A replacement that enters a
-/// permanent transformed does so via an `execute` `Effect::ChangeZone`, which
-/// already classifies `Unconditional` through the effect arm below. There is
-/// thus no `execute:null` collision to model and no `EventField::Transformed`.
+/// side field on `ReplacementDefinition` and no replacement-pipeline write path
+/// at all — it is an immutable event-construction property, set only when the
+/// event is built (`stack.rs` / `triggers.rs` / `flip_coin.rs`) and never
+/// mutated while replacements are applied. Two replacements therefore cannot
+/// collide on it, so there is no `execute:null` collision to model and no
+/// `EventField::Transformed`.
 fn candidate_materiality(
     state: &GameState,
     rid: ReplacementId,
