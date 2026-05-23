@@ -678,9 +678,13 @@ pub fn apply_create_token_after_replacement(
         crate::game::restrictions::record_token_created(state, obj_id);
 
         // CR 303.4 + CR 303.7: A Role/Aura token created "attached to" a host
-        // enters attached. CR 303.4i/303.4g: if the host is illegal/undefined the
-        // attach primitive no-ops and SBA (CR 704.5) moves the unattached Aura to
-        // the graveyard. Single authority: effects::attach.
+        // enters attached. If no legal host was bound, the token is created
+        // unattached and the SBA at CR 704.5m (an Aura not attached to an object
+        // or player is put into its owner's graveyard) removes it; for multiple
+        // same-controller Roles on one host, CR 704.5y keeps only the
+        // latest-timestamp Role. (CR 303.4i's strict "the token isn't created"
+        // outcome is approximated by this create-then-SBA path.) Single
+        // authority: effects::attach.
         if let Some(host) = &spec.attach_to {
             match host {
                 AttachTarget::Object(id) => {
@@ -748,7 +752,7 @@ pub fn apply_create_token_after_replacement(
     state.last_created_token_ids = created_ids;
 }
 
-/// CR 303.4 + CR 303.4i: Resolve the host an Aura/Role token is created
+/// CR 303.4: Resolve the host an Aura/Role token is created
 /// "attached to" from its `attach_to: TargetFilter`. Mirrors
 /// `attach::resolve_object_filter`'s ParentTarget arm (the first
 /// `TargetRef::Object` in `ability.targets`, which the for-each loop's
@@ -756,7 +760,8 @@ pub fn apply_create_token_after_replacement(
 /// targeting filter (e.g. "attached to target creature you control") also reads
 /// the chosen target out of `ability.targets`. Returns `None` when no legal
 /// host has been bound — the apply path then leaves the token unattached and
-/// CR 704.5 SBA moves the orphaned Aura to the graveyard.
+/// the CR 704.5m SBA (an unattached Aura) moves the orphaned Aura to the
+/// graveyard.
 ///
 /// This does NOT duplicate attach legality: the actual attach is performed by
 /// `attach::attach_to` / `attach::attach_to_player`, the single authority for
@@ -767,16 +772,19 @@ fn resolve_attach_host(
     filter: &TargetFilter,
 ) -> Option<AttachTarget> {
     match filter {
-        // CR 608.2b: Event-context hosts ("attached to the triggering creature").
+        // Event-context hosts ("attached to the triggering creature") resolve the
+        // triggering event's subject via the shared event-context resolver.
         TargetFilter::TriggeringSource | TargetFilter::AttachedTo => {
             crate::game::targeting::resolve_event_context_target(state, filter, ability.source_id)
                 .map(target_ref_to_attach_target)
         }
-        // CR 603.7 + CR 109.4: ParentTarget and any targeting filter resolve to
-        // the chosen target carried in `ability.targets`. ParentTarget is bound
-        // per-iteration by the for-each rebind; a `Typed` targeting filter is the
-        // single-target "attached to target creature" case. Both read the first
-        // target slot, preferring the first Object, else the first Player.
+        // ParentTarget and any targeting filter resolve to the chosen target
+        // carried in `ability.targets`. ParentTarget is bound per-iteration by the
+        // for-each rebind; a `Typed` targeting filter is the single-target
+        // "attached to target creature" case (CR 115.1a). Both read the first
+        // `TargetRef::Object` in `ability.targets`. Player-host Auras (CR 303.4
+        // permits a player host) are not yet implemented — no current card creates
+        // a token attached to a player, so a Player slot yields `None` here.
         _ => ability.targets.iter().find_map(|target| match target {
             TargetRef::Object(id) => Some(AttachTarget::Object(*id)),
             TargetRef::Player(_) => None,

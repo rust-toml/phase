@@ -1582,9 +1582,9 @@ fn effect_refs_parent_target(effect: &Effect) -> bool {
     effect_target_filter(effect).is_some_and(filter_refs_parent_target)
 }
 
-/// CR 109.5 + CR 603.7: Every object-target filter slot of an effect that may
-/// carry a parent-ref, INCLUDING slots `target_filter()` hides. Single source of
-/// truth for which slots a member-driven loop inspects for rebinding.
+/// Every object-target filter slot of an effect that may carry a parent-ref,
+/// INCLUDING slots `target_filter()` hides. Single source of truth for which
+/// slots a member-driven loop inspects for rebinding.
 ///
 /// `target_filter()` surfaces exactly one slot, and for some effects it is not
 /// the parent-ref-bearing one:
@@ -1602,7 +1602,10 @@ fn effect_refs_parent_target(effect: &Effect) -> bool {
 ///    `owner` rather than `attach_to` — so the filter is never double-counted.
 ///    Asinine Antics' "for each opponent creature, create a Cursed Role attached
 ///    to that creature" rebinds through this hidden `ParentTarget` slot.
-///  * `Effect::Attach` surfaces `target` but hides `attachment`.
+///  * `Effect::Attach` surfaces `target` but hides `attachment`; the arm fires
+///    only when `attachment.is_context_ref()`, mirroring the guards above (a
+///    non-context-ref `attachment` can never be a parent-ref, so excluding it
+///    cannot change the gate result).
 ///
 /// NOTE: the `_ => {}` arm means "no hidden object slot beyond `target_filter()`".
 /// Any FUTURE effect that hides an object slot behind `target_filter()` MUST add
@@ -1618,7 +1621,7 @@ fn effect_parent_ref_slots(effect: &Effect) -> Vec<&TargetFilter> {
         Effect::Token {
             attach_to: Some(f), ..
         } if f.is_context_ref() => slots.push(f),
-        Effect::Attach { attachment, .. } => slots.push(attachment),
+        Effect::Attach { attachment, .. } if attachment.is_context_ref() => slots.push(attachment),
         _ => {}
     }
     slots
