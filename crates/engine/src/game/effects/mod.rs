@@ -5170,7 +5170,7 @@ mod tests {
         let ability = ResolvedAbility::new(
             Effect::Counter {
                 target: TargetFilter::StackSpell,
-                source_static: None,
+                source_rider: None,
             },
             vec![TargetRef::Object(spell)],
             ObjectId(100),

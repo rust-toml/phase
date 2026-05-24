@@ -970,7 +970,7 @@ fn collect_pending_triggers(
                                     let unless_cost = ward_cost_to_ability_cost(ward);
                                     let counter_effect = Effect::Counter {
                                         target: TargetFilter::TriggeringSource,
-                                        source_static: None,
+                                        source_rider: None,
                                     };
                                     let mut ward_ability = ResolvedAbility::new(
                                         counter_effect,
