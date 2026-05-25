@@ -3005,6 +3005,18 @@ impl WaitingFor {
                 WaitingFor::ManaPayment { .. } | WaitingFor::PhyrexianPayment { .. }
             )
     }
+
+    /// CR 701.22a / CR 701.25a: Scry and surveil place the kept cards on top
+    /// "in any order", so any duplicate-free subset (in any order) is a legal
+    /// selection. These states cannot be validated by enumerating candidate
+    /// actions — `apply()` validates the submitted selection structurally
+    /// instead (see handle_resolution_choice).
+    pub fn accepts_freeform_card_selection(&self) -> bool {
+        matches!(
+            self,
+            WaitingFor::ScryChoice { .. } | WaitingFor::SurveilChoice { .. }
+        )
+    }
 }
 
 /// What the frontend requests for auto-pass (no internal state).
@@ -4876,6 +4888,41 @@ mod tests {
     fn default_creates_two_player_game() {
         let state = GameState::default();
         assert_eq!(state.players.len(), 2);
+    }
+
+    #[test]
+    fn accepts_freeform_card_selection_only_for_scry_and_surveil() {
+        // CR 701.22a / CR 701.25a: scry and surveil keep-on-top are freeform.
+        assert!(WaitingFor::ScryChoice {
+            player: PlayerId(0),
+            cards: vec![],
+        }
+        .accepts_freeform_card_selection());
+        assert!(WaitingFor::SurveilChoice {
+            player: PlayerId(0),
+            cards: vec![],
+        }
+        .accepts_freeform_card_selection());
+
+        // A sampling of other selection/decision states must NOT be freeform —
+        // they remain validated by candidate enumeration.
+        assert!(!WaitingFor::Priority {
+            player: PlayerId(0),
+        }
+        .accepts_freeform_card_selection());
+        assert!(!WaitingFor::RevealChoice {
+            player: PlayerId(0),
+            cards: vec![],
+            filter: TargetFilter::Any,
+            optional: false,
+            decline_runs_continuation: false,
+        }
+        .accepts_freeform_card_selection());
+        assert!(!WaitingFor::ManifestDreadChoice {
+            player: PlayerId(0),
+            cards: vec![],
+        }
+        .accepts_freeform_card_selection());
     }
 
     #[test]
