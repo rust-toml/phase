@@ -104,18 +104,12 @@ fn jace_draw_from_nonempty_library_does_not_win_and_does_not_leak() {
     );
 }
 
-/// CR 104.2b: With an empty library, the replacement should fire and the drawing
-/// player should win.
-///
-/// IGNORED: tracks a *separate, pre-existing* defect — a matched draw-replacement
-/// stashes its `WinTheGame` post-effect continuation but the continuation is not
-/// drained in the same action (it sits in `post_replacement_continuation`). This
-/// is the runtime half of the leak; the parser gate above prevents it from ever
-/// triggering on a non-empty draw, but the legitimate empty-library win
-/// (Laboratory Maniac / Jace) still does not resolve. Un-ignore when the
-/// post-replacement-continuation drain is fixed for the mandatory draw path.
+/// CR 614.6 + CR 614.11 + CR 704.3: With an empty library, the replacement fires,
+/// the original draw is fully replaced (CR 614.6) so the
+/// `drew_from_empty_library` SBA never trips (CR 704.5b), and the substituted
+/// `WinTheGame` continuation drains in the same resolution step (CR 704.3) so
+/// the controller wins before priority is offered to anyone.
 #[test]
-#[ignore = "pre-existing: post-replacement WinTheGame continuation is not drained on the empty-library draw"]
 fn jace_draw_from_empty_library_wins() {
     let Some(db) = load_db() else {
         return;
@@ -139,5 +133,127 @@ fn jace_draw_from_empty_library_wins() {
         "drawing from an empty library must win the game for Jace's controller. \
          waiting_for={:?}",
         runner.state().waiting_for
+    );
+    assert!(
+        runner.state().players[1].is_eliminated,
+        "opponent must be eliminated when P0 wins"
+    );
+    // CR 614.6: the original draw never happens, so the empty-library SBA
+    // (CR 704.5b) must NOT trip on the substituted draw.
+    assert!(
+        !runner.state().players[0].drew_from_empty_library,
+        "the replaced draw never happens (CR 614.6); empty-library flag must stay false"
+    );
+    // CR 704.3: the continuation must drain in the same resolution step — no
+    // leak into the next priority pass.
+    assert!(
+        runner.state().post_replacement_continuation.is_none(),
+        "post_replacement_continuation must drain in the same step; found {:?}",
+        runner.state().post_replacement_continuation
+    );
+}
+
+/// CR 614.6 + CR 614.11 + CR 704.3: Laboratory Maniac is the original printing
+/// of this class — same replacement template, different card. Pinning a sibling
+/// test ensures the fix is at the *class* level (any "if you would draw a card
+/// while your library has no cards in it, you win the game instead" replacement)
+/// and not card-specific to Jace.
+#[test]
+fn laboratory_maniac_draw_from_empty_library_wins() {
+    let Some(db) = load_db() else {
+        return;
+    };
+
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::PreCombatMain);
+    scenario.add_real_card(P0, "Laboratory Maniac", Zone::Battlefield, db);
+    for _ in 0..5 {
+        scenario.add_real_card(P1, "Plains", Zone::Library, db);
+    }
+    let mut runner = scenario.build();
+    engine::game::rehydrate_game_from_card_db(runner.state_mut(), db);
+    runner.state_mut().debug_mode = true;
+
+    runner
+        .act(GameAction::Debug(DebugAction::DrawCards {
+            player_id: P0,
+            count: 1,
+        }))
+        .expect("debug draw must succeed");
+    runner.advance_until_stack_empty();
+
+    assert!(
+        matches!(
+            runner.state().waiting_for,
+            WaitingFor::GameOver { winner: Some(P0) }
+        ),
+        "drawing from an empty library must win the game for Laboratory Maniac's controller. \
+         waiting_for={:?}",
+        runner.state().waiting_for
+    );
+    assert!(
+        !runner.state().players[0].drew_from_empty_library,
+        "the replaced draw never happens (CR 614.6); empty-library flag must stay false"
+    );
+    assert!(
+        runner.state().post_replacement_continuation.is_none(),
+        "post_replacement_continuation must drain in the same step; found {:?}",
+        runner.state().post_replacement_continuation
+    );
+}
+
+/// CR 504.1 + CR 614.6 + CR 614.11 + CR 704.3: The user-reported scenario was a
+/// 4-player Commander game where the *natural* draw-step draw ended the game
+/// spuriously. The runtime path for that draw is `turns.rs::execute_draw`, NOT
+/// `effects::draw::resolve` or `DebugAction::DrawCards`. This test drives the
+/// engine from `Phase::Untap` through `auto_advance_to_main_phase`, which
+/// invokes `execute_draw` during the Draw step. With an empty library and Jace
+/// on the battlefield, the pre-zero + drain must make P0 win — and the
+/// `WinTheGame` continuation must NOT leak past the draw step.
+#[test]
+fn jace_natural_draw_step_from_empty_library_wins() {
+    let Some(db) = load_db() else {
+        return;
+    };
+
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::Untap);
+    scenario.add_real_card(P0, "Jace, Wielder of Mysteries", Zone::Battlefield, db);
+    // P0 library intentionally empty — that's the precondition under test.
+    for _ in 0..5 {
+        scenario.add_real_card(P1, "Plains", Zone::Library, db);
+    }
+    let mut runner = scenario.build();
+    engine::game::rehydrate_game_from_card_db(runner.state_mut(), db);
+    runner.state_mut().debug_mode = true;
+
+    // Drive the natural turn flow: Untap → Upkeep → Draw → PreCombatMain.
+    // `execute_draw` runs during the Draw step; the empty-library replacement
+    // must fire, pre-zero the draw, and drain the WinTheGame continuation
+    // before priority is offered.
+    runner.auto_advance_to_main_phase();
+    runner.advance_until_stack_empty();
+
+    assert!(
+        matches!(
+            runner.state().waiting_for,
+            WaitingFor::GameOver { winner: Some(P0) }
+        ),
+        "natural draw step from an empty library must win the game for Jace's \
+         controller. waiting_for={:?}",
+        runner.state().waiting_for
+    );
+    assert!(
+        runner.state().players[1].is_eliminated,
+        "opponent must be eliminated when P0 wins via the natural draw step"
+    );
+    assert!(
+        !runner.state().players[0].drew_from_empty_library,
+        "the replaced draw never happens (CR 614.6); empty-library flag must stay false"
+    );
+    assert!(
+        runner.state().post_replacement_continuation.is_none(),
+        "post_replacement_continuation must drain in the same step; found {:?}",
+        runner.state().post_replacement_continuation
     );
 }
