@@ -164,6 +164,7 @@ pub mod solve_case;
 pub mod specialize;
 pub mod speed_effects;
 pub mod spellbook;
+pub mod turn_face_up;
 // Tests for `spellbook` live in a sibling file (declared here, not in
 // `spellbook.rs`, so `spellbook.rs` stays implementation-only).
 #[cfg(test)]
@@ -1200,7 +1201,11 @@ fn effect_manages_own_outcome_flag(effect: &Effect) -> bool {
 fn effect_writes_last_revealed_ids(effect: &Effect) -> bool {
     matches!(
         effect,
-        Effect::RevealTop { .. } | Effect::Dig { .. } | Effect::RevealUntil { .. } | Effect::Clash
+        Effect::RevealTop { .. }
+            | Effect::Dig { .. }
+            | Effect::RevealUntil { .. }
+            | Effect::Clash
+            | Effect::TurnFaceUp { .. }
     )
 }
 
@@ -2105,6 +2110,7 @@ pub fn resolve_effect(
         Effect::Bolster { .. } => bolster::resolve(state, ability, events),
         Effect::Manifest { .. } => manifest::resolve(state, ability, events),
         Effect::ManifestDread => manifest_dread::resolve(state, ability, events),
+        Effect::TurnFaceUp { .. } => turn_face_up::resolve(state, ability, events),
         Effect::ExtraTurn { .. } => extra_turn::resolve(state, ability, events),
         Effect::GrantExtraLoyaltyActivations { .. } => {
             grant_extra_loyalty_activations::resolve(state, ability, events)
