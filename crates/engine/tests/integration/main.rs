@@ -150,6 +150,7 @@ mod issue_2852_breya_sacrifice_cost;
 mod issue_2856_shatterskull_divide_softlock;
 mod issue_2857_caesar_reflexive_modal;
 mod issue_2860_sevinne_reclamation_flashback_copy;
+mod issue_2862_teferi_loyalty;
 mod issue_2863_commander_aura_zone_change;
 mod issue_2864_kaldra_compleat_haste;
 mod issue_2866_professor_onyx_magecraft_copy;
